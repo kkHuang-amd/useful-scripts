@@ -18,11 +18,12 @@ cmd = [
     "--model-path", "/dockerx/data/models/openai/gpt-oss-120b/",
     "--tp", "8",
     "--trust-remote-code",
-    "--chunked-prefill-size", "130172",
+    "--chunked-prefill-size", "131072",
     "--max-running-requests", "128",
     "--mem-fraction-static", "0.85",
     "--prefill-attention-backend", args.prefill,
     "--decode-attention-backend", args.decode,
+    "--page-size", "64",
     "--disable-radix-cache",
     "--port", "8000",
 ]
