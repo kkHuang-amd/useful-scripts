@@ -1,4 +1,5 @@
 IMAGE=$1
+IONIC_PATH=$2
 
 #docker run -it \
 #        --ulimit memlock=-1:-1 \
@@ -19,5 +20,4 @@ IMAGE=$1
 #        --name ${CONTAINER_NAME} \
 #        ${IMAGE_NAME} /bin/bash
 
-
-docker run -it --privileged --network=host --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --ipc=host --shm-size 64G -v /:/dockerx $IMAGE
+docker run -it --privileged --network=host --device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --ipc=host --shm-size 64G -v /:/dockerx -v ${IONIC_PATH}:${IONIC_PATH}:ro $IMAGE
