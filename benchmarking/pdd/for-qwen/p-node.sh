@@ -23,11 +23,11 @@ set -e
 
 source /opt/venv/bin/activate 2>/dev/null
 
-PREFILL_HOST="${PREFILL_HOST:-10.235.58.248}"
-DECODE_HOST="${DECODE_HOST:-10.235.58.247}"
+PREFILL_HOST="${PREFILL_HOST:-10.235.58.246}"
+DECODE_HOST="${DECODE_HOST:-10.235.58.248}"
 SERVER_PORT=8000
 ROUTER_PORT=30000
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/gpt-oss-120b/}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Qwen3.5-397B-A17B-FP8/}"
 KV_CACHE_DTYPE="auto"
 RUN_SWEEP=false
 SWEEP_OUTPUT_DIR="/models/sweep_results_ep"
@@ -62,10 +62,10 @@ echo ""
 export GLOO_SOCKET_IFNAME=enp196s0
 export NCCL_SOCKET_IFNAME=enp196s0
 export NCCL_IB_HCA=`rdma dev show | awk -F': ' '{print $2}' | awk '{printf "%s:1,", $1}' | sed 's/,$/\n/'`
-export NCCL_IB_HCA="ionic_0:1,ionic_1:1,ionic_2:1,ionic_3:1"
+export NCCL_IB_HCA="ionic_0:1,ionic_1:1"
 export NCCL_IB_GID_INDEX=1
 export IBDEVICES=`rdma dev show | awk -F': ' '{print $2}' | awk '{print $1}' | paste -sd ','`
-export IBDEVICES="ionic_0,ionic_1,ionic_2,ionic_3"
+export IBDEVICES="ionic_0,ionic_1"
 export MORI_RDMA_SL=3
 export MORI_RDMA_TC=104
 export SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=1200
@@ -94,10 +94,10 @@ export SGLANG_MORI_FP4_DISP=True
 
 export PYTHONPATH=/sgl-workspace/sglang/python:/sgl-workspace/aiter:$PYTHONPATH
 
-ln -sf /usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71 /usr/lib/x86_64-linux-gnu/libionic.so.1 2>/dev/null
-ln -sf /usr/lib/x86_64-linux-gnu/libionic.so.1 /usr/lib/x86_64-linux-gnu/libionic.so 2>/dev/null
-ln -sf /usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71 /usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so 2>/dev/null
-ldconfig 2>/dev/null
+#ln -sf /usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71 /usr/lib/x86_64-linux-gnu/libionic.so.1 2>/dev/null
+#ln -sf /usr/lib/x86_64-linux-gnu/libionic.so.1 /usr/lib/x86_64-linux-gnu/libionic.so 2>/dev/null
+#ln -sf /usr/lib/x86_64-linux-gnu/libionic.so.1.0.54.0-149.g3304be71 /usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so 2>/dev/null
+#ldconfig 2>/dev/null
 
 TORCH_LIB=$(python3 -c "import torch,os;print(os.path.join(os.path.dirname(torch.__file__),'lib'))" 2>/dev/null)
 export LD_LIBRARY_PATH=${TORCH_LIB}:${LD_LIBRARY_PATH}
@@ -129,6 +129,8 @@ echo "  Decode server is ready!"
 echo "[Step 3/4] Starting prefill server on port $SERVER_PORT..."
 PREFILL_LOG="${LOG_PREFIX}_prefill_${TIMESTAMP}.log"
 
+export SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK=16384
+
 python3 -m sglang.launch_server \
     --model-path "$MODEL_PATH" \
     --disaggregation-mode prefill \
@@ -137,18 +139,13 @@ python3 -m sglang.launch_server \
     --host 0.0.0.0 \
     --port $SERVER_PORT \
     --tp-size 8 \
-    --ep-size 8 \
     --trust-remote-code \
-    --ep-dispatch-algorithm fake \
-    --load-balance-method round_robin \
-    --max-running-requests 256 \
     --mem-fraction-static 0.8 \
     --attention-backend aiter \
     --kv-cache-dtype "$KV_CACHE_DTYPE" \
     --chunked-prefill-size 262144 \
     --decode-log-interval 100 \
     --watchdog-timeout 3600 \
-    --disable-radix-cache \
     2>&1 | tee "$PREFILL_LOG" &
 PREFILL_PID=$!
 
