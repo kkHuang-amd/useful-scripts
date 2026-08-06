@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/Kimi-K3}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Kimi-K3}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
 CONCS="${CONCS:-1 2 4 8}"

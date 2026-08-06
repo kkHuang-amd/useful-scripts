@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8000/v1}"
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/Kimi-K3}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Kimi-K3}"
 
 echo "== Processes =="
 pgrep -af "sglang serve|eval.py (ocrbench|mmmu|kimi_toolcall)|beam_generate.py" \

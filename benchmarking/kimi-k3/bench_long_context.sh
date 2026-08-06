@@ -3,7 +3,7 @@ set -euo pipefail
 
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
-MODEL="${MODEL:-/dockerx/data/Kimi-K3}"
+MODEL="${MODEL:-/dockerx/data/models/Kimi-K3}"
 ISL="${ISL:-68000}"
 OSL="${OSL:-350}"
 CONCS="${CONCS:-1 2 4 8}"

@@ -28,9 +28,10 @@ exec docker run --rm -it \
   --group-add video \
   --cap-add SYS_PTRACE \
   --security-opt seccomp=unconfined \
-  -v /dockerx/data/Kimi-K3:/dockerx/data/Kimi-K3:ro \
+  -v /dockerx/data/models/Kimi-K3:/dockerx/data/models/Kimi-K3:ro \
+  -v /dockerx/data/models/Kimi-K3-DSpark:/dockerx/data/models/Kimi-K3-DSpark:ro \
   -v /sgl-workspace/kvv-bench/kvv-k3-0727-update:/sgl-workspace/kvv-bench/kvv-k3-0727-update \
-  -v /dockerx/home/wunhuang/tmp/useful-scripts/benchmarking/kimi-k3:/opt/kimi-k3-scripts:ro \
+  -v /dockerx/var/amdsgl/kk/workspace/useful-scripts/benchmarking/kimi-k3:/opt/kimi-k3-scripts:ro \
   "$IMAGE" \
   "${command[@]}"
 

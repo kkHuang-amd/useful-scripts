@@ -36,5 +36,4 @@ docker run -it \
   --group-add rdma \
   -v /:/dockerx \
   -v /dev/infiniband:/dev/infiniband \
-  -v /usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:/usr/lib/x86_64-linux-gnu/libibverbs/libionic-rdmav34.so:ro \
   ${IMAGE}

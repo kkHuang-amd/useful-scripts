@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/Kimi-K3}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Kimi-K3}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
 
 mapfile -t pids < <(

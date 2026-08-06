@@ -3,7 +3,7 @@ set -euo pipefail
 
 BENCH_DIR="${BENCH_DIR:-/sgl-workspace/kvv-bench/kvv-k3-0727-update}"
 BEAM_DIR="$BENCH_DIR/beam"
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/Kimi-K3}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Kimi-K3}"
 BASE_URL="${BASE_URL:-http://localhost:8000/v1}"
 BEAM_API_KEY="${BEAM_API_KEY:-EMPTY}"
 CONCURRENCY="${CONCURRENCY:-16}"

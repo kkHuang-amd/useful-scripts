@@ -8,7 +8,7 @@ if [[ ! "$BENCH" =~ ^(ocrbench|mmmu|toolcall|all)$ ]]; then
 fi
 
 BENCH_DIR="${BENCH_DIR:-/sgl-workspace/kvv-bench/kvv-k3-0727-update}"
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/Kimi-K3}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Kimi-K3}"
 BASE_URL="${BASE_URL:-http://localhost:8000/v1}"
 API_KEY="${API_KEY:-EMPTY}"
 MAX_CONNECTIONS="${MAX_CONNECTIONS:-50}"

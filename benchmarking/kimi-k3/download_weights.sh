@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ID="${REPO_ID:-moonshotai/Kimi-K3}"
-MODEL_PATH="${MODEL_PATH:-/dockerx/data/Kimi-K3}"
+MODEL_PATH="${MODEL_PATH:-/dockerx/data/models/Kimi-K3}"
 
 command -v hf >/dev/null 2>&1 || {
   echo "error: Hugging Face CLI 'hf' is not installed" >&2
