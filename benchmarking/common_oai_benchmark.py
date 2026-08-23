@@ -9,6 +9,7 @@ import json
 import random
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
@@ -45,6 +46,186 @@ class RequestResult:
             / 1e9
             / (self.completion_tokens - 1)
         )
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+class FirstTokenProfiler:
+    def __init__(
+        self,
+        engine,
+        base_url,
+        output_dir,
+        seconds,
+        timeout_s,
+        after_first_tokens=1,
+        mode="first_token",
+        stop_after_wave=False,
+    ):
+        self.engine = engine
+        self.base_url = base_url.rstrip("/")
+        self.output_dir = output_dir
+        self.seconds = seconds
+        self.timeout_s = timeout_s
+        self.after_first_tokens = after_first_tokens
+        self.mode = mode
+        self.stop_after_wave = stop_after_wave
+        self.task = None
+        self.started = asyncio.Event()
+        self.wave_complete = asyncio.Event()
+        self.observed_request_ids = set()
+        self.result = {
+            "mode": "wave" if stop_after_wave else "timed",
+            "triggered": False,
+            "success": False,
+            "error": "",
+            "requested_threshold": after_first_tokens,
+            "observed_count": 0,
+            "first_token_observations": [],
+        }
+
+    @property
+    def summary(self):
+        return {
+            "config": {
+                "profile_on_first_token": self.mode == "first_token",
+                "profile_before_wave": self.mode == "before_wave",
+                "profile_stop_after_wave": self.stop_after_wave,
+                "mode": self.result["mode"],
+                "engine": self.engine,
+                "base_url": self.base_url,
+                "output_dir": self.output_dir,
+                "seconds": self.seconds,
+                "after_first_tokens": self.after_first_tokens,
+            },
+            "result": self.result,
+        }
+
+    async def start_before_wave(self):
+        if self.mode != "before_wave":
+            raise RuntimeError("profiler is not configured for before-wave mode")
+        self.result.update({"triggered": True, "triggered_at": utc_now()})
+        self.task = asyncio.create_task(self._run())
+        await self.started.wait()
+        if self.result["error"]:
+            raise RuntimeError(self.result["error"])
+
+    def trigger(self, request_id, first_token_ns):
+        if request_id in self.observed_request_ids:
+            return
+        self.observed_request_ids.add(request_id)
+        self.result["first_token_observations"].append(
+            {
+                "request_id": request_id,
+                "first_token_perf_counter_ns": first_token_ns,
+                "observed_at": utc_now(),
+            }
+        )
+        self.result["observed_count"] = len(self.observed_request_ids)
+        if (
+            self.task is not None
+            or self.result["observed_count"] < self.after_first_tokens
+        ):
+            return
+        self.result.update(
+            {
+                "triggered": True,
+                "trigger_request_id": request_id,
+                "first_token_perf_counter_ns": first_token_ns,
+                "triggered_at": utc_now(),
+            }
+        )
+        self.task = asyncio.create_task(self._run())
+
+    async def finish(self):
+        if self.task is None:
+            self.result["error"] = (
+                "profiling trigger threshold was not met: observed "
+                f"{self.result['observed_count']} unique measured requests "
+                f"with non-empty first tokens, required {self.after_first_tokens}"
+            )
+            return
+        await self.task
+
+    def mark_wave_complete(self):
+        self.result["wave_completed_at"] = utc_now()
+        self.result["wave_completed_perf_counter_ns"] = time.perf_counter_ns()
+
+    def signal_wave_complete(self):
+        if not self.stop_after_wave:
+            raise RuntimeError("profiler is not configured to stop after the wave")
+        self.result["wave_complete_signaled_at"] = utc_now()
+        self.result["wave_complete_signaled_perf_counter_ns"] = (
+            time.perf_counter_ns()
+        )
+        self.wave_complete.set()
+
+    async def _post(self, session, endpoint, payload, name):
+        self.result[f"{name}_request_at"] = utc_now()
+        self.result[f"{name}_request_perf_counter_ns"] = time.perf_counter_ns()
+        async with session.post(
+            f"{self.base_url}/{endpoint}",
+            json=payload,
+        ) as response:
+            body = await response.text()
+            self.result[f"{name}_response_at"] = utc_now()
+            self.result[f"{name}_response_perf_counter_ns"] = time.perf_counter_ns()
+            self.result[f"{name}_http_status"] = response.status
+            self.result[f"{name}_response"] = body[:500]
+            if not 200 <= response.status < 300:
+                raise RuntimeError(
+                    f"POST /{endpoint} returned HTTP {response.status}: {body[:500]}"
+                )
+
+    async def _run(self):
+        start_payload = (
+            {
+                "output_dir": self.output_dir,
+                "activities": ["CPU", "GPU"],
+                "with_stack": False,
+                "record_shapes": False,
+                "profile_by_stage": False,
+                "merge_profiles": False,
+            }
+            if self.engine == "sglang"
+            else {}
+        )
+        self.result["start_payload"] = start_payload
+        connector = aiohttp.TCPConnector(
+            limit=1,
+            limit_per_host=1,
+            enable_cleanup_closed=True,
+        )
+        timeout = aiohttp.ClientTimeout(total=self.timeout_s)
+        try:
+            async with aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout,
+                trust_env=True,
+            ) as session:
+                await self._post(session, "start_profile", start_payload, "start")
+                self.result["profile_window_started_at"] = utc_now()
+                self.started.set()
+                profile_window_start = time.perf_counter()
+                if self.stop_after_wave:
+                    await self.wave_complete.wait()
+                else:
+                    await asyncio.sleep(self.seconds)
+                self.result["profile_window_elapsed_s"] = (
+                    time.perf_counter() - profile_window_start
+                )
+                self.result["profile_duration_s"] = self.result[
+                    "profile_window_elapsed_s"
+                ]
+                await self._post(session, "stop_profile", {}, "stop")
+            self.result["completed_at"] = utc_now()
+            self.result["success"] = True
+        except Exception as exc:
+            self.started.set()
+            self.result["failed_at"] = utc_now()
+            self.result["error"] = str(exc)
 
 
 def percentile(values, q):
@@ -180,7 +361,17 @@ def load_manifest(path):
     return prompts
 
 
-async def request_one(session, semaphore, url, model, prompt, prompt_len, output_len, request_id):
+async def request_one(
+    session,
+    semaphore,
+    url,
+    model,
+    prompt,
+    prompt_len,
+    output_len,
+    request_id,
+    first_token_callback=None,
+):
     result = RequestResult(request_id=request_id, prompt_tokens=prompt_len)
     payload = {
         "model": model,
@@ -227,6 +418,8 @@ async def request_one(session, semaphore, url, model, prompt, prompt_len, output
                         if choices and choices[0].get("text"):
                             if not result.first_token_ns:
                                 result.first_token_ns = now
+                                if first_token_callback is not None:
+                                    first_token_callback(request_id, result.first_token_ns)
                             result.last_token_ns = now
                             result.text_chunks += 1
         if not result.done_seen:
@@ -246,7 +439,10 @@ async def request_one(session, semaphore, url, model, prompt, prompt_len, output
 async def run(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer or args.model)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.tokenizer or args.model,
+        trust_remote_code=args.trust_remote_code,
+    )
     total = args.warmup_requests + args.num_prompts
     manifest_path = Path(args.prompt_manifest)
     if manifest_path.exists():
@@ -275,6 +471,23 @@ async def run(args):
     timeout = aiohttp.ClientTimeout(total=args.timeout_s)
     semaphore = asyncio.Semaphore(args.max_concurrency)
     url = args.base_url.rstrip("/") + "/v1/completions"
+    profiler = None
+    profile_before_wave = getattr(args, "profile_before_wave", False)
+    profile_stop_after_wave = getattr(args, "profile_stop_after_wave", False)
+    profile_enabled = (
+        getattr(args, "profile_on_first_token", False) or profile_before_wave
+    )
+    if profile_enabled:
+        profiler = FirstTokenProfiler(
+            engine=args.profile_engine,
+            base_url=args.profile_base_url,
+            output_dir=args.profile_output_dir,
+            seconds=args.profile_seconds,
+            timeout_s=args.timeout_s,
+            after_first_tokens=args.profile_after_first_tokens,
+            mode="before_wave" if profile_before_wave else "first_token",
+            stop_after_wave=profile_stop_after_wave,
+        )
     async with aiohttp.ClientSession(
         connector=connector,
         timeout=timeout,
@@ -306,6 +519,11 @@ async def run(args):
                 f"warmup failed: {len(failures)} failures; first={failures[0]['error']}"
             )
         measured_prompts = prompts[args.warmup_requests : total]
+        if profile_before_wave:
+            await profiler.start_before_wave()
+        if profiler is not None:
+            profiler.result["wave_started_at"] = utc_now()
+            profiler.result["wave_started_perf_counter_ns"] = time.perf_counter_ns()
         start = time.perf_counter()
         results = await asyncio.gather(
             *[
@@ -318,20 +536,49 @@ async def run(args):
                     args.input_len,
                     args.output_len,
                     request_id,
+                    profiler.trigger if profiler is not None else None,
                 )
                 for request_id, prompt in enumerate(measured_prompts)
             ]
         )
         duration = time.perf_counter() - start
-    with (output_dir / "requests.jsonl").open("w") as handle:
-        for result in results:
-            handle.write(json.dumps(asdict(result)) + "\n")
+        if profiler is not None:
+            profiler.mark_wave_complete()
+        with (output_dir / "requests.jsonl").open("w") as handle:
+            for result in results:
+                handle.write(json.dumps(asdict(result)) + "\n")
+        if profiler is not None:
+            if profile_stop_after_wave:
+                profiler.signal_wave_complete()
+            await profiler.finish()
+            stop_ns = profiler.result.get("stop_response_perf_counter_ns")
+            profiler.result["stop_while_wave_active"] = (
+                stop_ns is not None
+                and stop_ns < profiler.result["wave_completed_perf_counter_ns"]
+            )
     summary = summarize(results, duration)
-    summary["config"] = vars(args)
+    config = vars(args).copy()
+    if not profile_enabled:
+        for name in (
+            "profile_on_first_token",
+            "profile_before_wave",
+            "profile_stop_after_wave",
+            "profile_engine",
+            "profile_output_dir",
+            "profile_seconds",
+            "profile_base_url",
+            "profile_after_first_tokens",
+        ):
+            config.pop(name, None)
+    summary["config"] = config
     summary["prompt_manifest"] = manifest_meta
+    if profiler is not None:
+        summary["profile"] = profiler.summary
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
-    if summary["failed_requests"]:
+    if summary["failed_requests"] or (
+        profiler is not None and not profiler.result["success"]
+    ):
         raise SystemExit(1)
 
 
@@ -340,6 +587,7 @@ def parse_args():
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--tokenizer")
+    parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--input-len", type=int, default=8192)
     parser.add_argument("--output-len", type=int, default=1024)
     parser.add_argument("--num-prompts", type=int, default=5120)
@@ -351,7 +599,61 @@ def parse_args():
     parser.add_argument("--timeout-s", type=int, default=21600)
     parser.add_argument("--prompt-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
-    return parser.parse_args()
+    parser.add_argument(
+        "--profile-on-first-token",
+        action="store_true",
+        help="profile once after the configured number of measured first tokens",
+    )
+    parser.add_argument(
+        "--profile-before-wave",
+        action="store_true",
+        help="start profiling immediately before launching the measured wave",
+    )
+    parser.add_argument(
+        "--profile-stop-after-wave",
+        action="store_true",
+        help="stop a before-wave profile only after all measured requests finish",
+    )
+    parser.add_argument("--profile-engine", choices=("sglang", "atom"))
+    parser.add_argument("--profile-output-dir")
+    parser.add_argument("--profile-seconds", type=float, default=2.0)
+    parser.add_argument(
+        "--profile-after-first-tokens",
+        type=int,
+        default=1,
+        metavar="N",
+        help="start profiling after N unique measured requests produce text",
+    )
+    parser.add_argument(
+        "--profile-base-url",
+        help="profile control URL (defaults to --base-url)",
+    )
+    args = parser.parse_args()
+    if args.profile_base_url is None:
+        args.profile_base_url = args.base_url
+    if args.profile_on_first_token and args.profile_before_wave:
+        parser.error(
+            "--profile-on-first-token and --profile-before-wave are mutually exclusive"
+        )
+    if args.profile_stop_after_wave and not args.profile_before_wave:
+        parser.error(
+            "--profile-stop-after-wave requires --profile-before-wave"
+        )
+    if args.profile_on_first_token or args.profile_before_wave:
+        if args.profile_engine is None:
+            parser.error("--profile-engine is required when profiling is enabled")
+        if args.profile_engine == "sglang" and not args.profile_output_dir:
+            parser.error(
+                "--profile-output-dir is required for SGLang profiling"
+            )
+        if args.profile_seconds <= 0:
+            parser.error("--profile-seconds must be greater than zero")
+        if not 1 <= args.profile_after_first_tokens <= args.num_prompts:
+            parser.error(
+                "--profile-after-first-tokens must satisfy "
+                "1 <= N <= --num-prompts"
+            )
+    return args
 
 
 if __name__ == "__main__":
